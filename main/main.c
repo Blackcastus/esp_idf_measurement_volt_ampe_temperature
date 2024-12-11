@@ -29,6 +29,7 @@
 // include modbus
 #include "modbus_params.h"  // for modbus parameters structures
 #include "mbcontroller.h"
+
 // include mqtt
 #include "lwip/sockets.h"
 #include "lwip/dns.h"
@@ -106,8 +107,14 @@ enum {
 // Access Mode - can be used to implement custom options for processing of characteristic (Read/Write restrictions, factory mode values and etc).
 const mb_parameter_descriptor_t device_parameters[] = {
     // { CID, Param Name, Units, Modbus Slave Addr, Modbus Reg Type, Reg Start, Reg Size, Instance Offset, Data Type, Data Size, Parameter Options, Access Mode}
-    { CID_INP_DATA_0, STR("Data_channel_0"), STR("Volts"), MB_DEVICE_ADDR1, MB_PARAM_INPUT, 0, 2,
-            INPUT_OFFSET(input_data0), PARAM_TYPE_FLOAT, 4, OPTS( -10, 10, 1 ), PAR_PERMS_READ_WRITE_TRIGGER },
+    { CID_INP_DATA_0, STR("Volt"), STR("V"), MB_DEVICE_ADDR1, MB_PARAM_INPUT, 0, 10,
+            INPUT_OFFSET(input_data0), PARAM_TYPE_FLOAT, 20, OPTS( -10, 2000, 1 ), PAR_PERMS_READ_WRITE_TRIGGER },
+    // { CID_INP_DATA_1, STR("Ampe"), STR("A"), MB_DEVICE_ADDR1, MB_PARAM_INPUT, 1, 3,
+            // INPUT_OFFSET(input_data1), PARAM_TYPE_FLOAT, 4, OPTS( -40, 100, 1 ), PAR_PERMS_READ_WRITE_TRIGGER },
+    // { CID_INP_DATA_1, STR("Ampe"), STR("A"), MB_DEVICE_ADDR1, MB_PARAM_INPUT, 1, 2,
+    //         INPUT_OFFSET(input_data1), PARAM_TYPE_FLOAT, 4, OPTS( -40, 100, 1 ), PAR_PERMS_READ_WRITE_TRIGGER }
+    // { CID_INP_DATA_0, STR("Data_channel_2"), STR("Ampe"), MB_DEVICE_ADDR1, MB_PARAM_INPUT, 1, 4,
+    //         INPUT_OFFSET(data_block1), PARAM_TYPE_FLOAT, 4, OPTS( -10, 10, 1 ), PAR_PERMS_READ_WRITE_TRIGGER },
 };
 
 // Calculate number of parameters in the table
@@ -254,6 +261,8 @@ static void* master_get_param_data(const mb_parameter_descriptor_t* param_descri
     assert(param_descriptor != NULL);
     void* instance_ptr = NULL;
     if (param_descriptor->param_offset != 0) {
+        printf("DEBUG: Slave addr = %d\n", param_descriptor->mb_slave_addr);
+        printf("DEBUG: param_size = %d | mb_size = %d\n", param_descriptor->param_size, param_descriptor->mb_size);
        switch(param_descriptor->mb_param_type)
        {
            case MB_PARAM_HOLDING:
@@ -300,36 +309,44 @@ static void TaskModbusHandle(void *arg)
             ESP_LOGI(TAG_MODBUS, "cid: %d\n", cid);
             err = mbc_master_get_cid_info(cid, &param_descriptor);
             if ((err != ESP_ERR_NOT_FOUND) && (param_descriptor != NULL)) {
-                void* temp_data_ptr = master_get_param_data(param_descriptor);
-                assert(temp_data_ptr);
+                void* mb_data_ptr = master_get_param_data(param_descriptor);
+
+                assert(mb_data_ptr);
                 uint8_t type = 0;
                 if ((param_descriptor->param_type == PARAM_TYPE_ASCII) &&
-                        (param_descriptor->cid == CID_HOLD_TEST_REG)) {
-                            ESP_LOGI("MODBUS", "PARAM_TYPE_ASCII | CID_HOLD_TEST_REG");
+                        (param_descriptor->cid == CID_HOLD_TEST_REG)) 
+                {
+                            ESP_LOGI(TAG_MODBUS, "PARAM_TYPE_ASCII | CID_HOLD_TEST_REG");
                 } 
-                else {
-                    ESP_LOGI("MODBUS", "MB_PARAM_HOLDING | MB_PARAM_INPUT");
+                else 
+                {
+                    ESP_LOGI(TAG_MODBUS, "MB_PARAM_HOLDING | MB_PARAM_INPUT");
                     err = mbc_master_get_parameter(cid, (char*)param_descriptor->param_key,
-                                                        (uint8_t*)temp_data_ptr, &type);
+                                                        (uint8_t*)mb_data_ptr, &type);
+                    printf("DEBUG:");
                     if (err == ESP_OK) {
-                        if ((param_descriptor->mb_param_type == MB_PARAM_HOLDING) ||
-                            (param_descriptor->mb_param_type == MB_PARAM_INPUT)) {
-                            value = *(float*)temp_data_ptr;
-                            ESP_LOGI(TAG_MODBUS, "Characteristic #%u %s (%s) value = %f (0x%" PRIx32 ") read successful.",
-                                            param_descriptor->cid,
-                                            param_descriptor->param_key,
-                                            param_descriptor->param_units,
-                                            value,
-                                            *(uint32_t*)temp_data_ptr);
-                            if (((value > param_descriptor->param_opts.max) ||
-                                (value < param_descriptor->param_opts.min))) {
-                                    alarm_state = true;
-                                    break;
-                            }
-                        } else {
-                            
+                        if (param_descriptor->mb_param_type == MB_PARAM_HOLDING) 
+                        {
+
+                        } 
+                        else if (param_descriptor->mb_param_type == MB_PARAM_INPUT)
+                        {
+                            // value = *(float*)(mb_data_ptr);
+                            uint16_t Voltage = *(uint16_t*)(mb_data_ptr);
+                            uint32_t Current = (*((uint64_t*)mb_data_ptr) >> 16) & 0xFFFF;;
+                            // uint32_t Power = (*(uint32_t*)mb_data_ptr >> 0xffffff);
+                            // uint32_t Energy ;
+                            // uint16_t Frequency ;
+                            // uint16_t Power_factor ;
+                            // uint16_t Alarm_status;
+                            printf("Debug: data raw: %16llx\n", *(uint64_t*)mb_data_ptr);
+                            printf("Debug: Volt: %d | Ampe: %ld\n", Voltage, Current);
+                            ESP_LOGI(TAG_MODBUS, "Volt = %f (V), Ampe = %f (A)",
+                                            (Voltage/10.0), Current/1000.0);
                         }
-                    } else {
+                    }
+                    else
+                    {
                         ESP_LOGE(TAG_MODBUS, "Characteristic #%u (%s) read fail, err = 0x%x (%s).",
                                         param_descriptor->cid,
                                         param_descriptor->param_key,
@@ -337,9 +354,10 @@ static void TaskModbusHandle(void *arg)
                                         (char*)esp_err_to_name(err));
                     }
                 }
-                vTaskDelay(POLL_TIMEOUT_TICS); // timeout between polls
+                vTaskDelay(2000/portTICK_PERIOD_MS); // timeout between polls
             }
         }
+        vTaskDelay(5000/portTICK_PERIOD_MS); // timeout between polls
     }
 }
 
@@ -398,25 +416,31 @@ void app_main(void)
 	ESP_LOGI(TAG_MAIN, "[APP] Startup..");
     ESP_LOGI(TAG_MAIN, "[APP] Free memory: %" PRIu32 " bytes", esp_get_free_heap_size());
     ESP_LOGI(TAG_MAIN, "[APP] IDF version: %s", esp_get_idf_version());
-    esp_log_level_set("*", ESP_LOG_INFO);
-    esp_log_level_set("mqtt_client", ESP_LOG_VERBOSE);
-    esp_log_level_set("mqtt_example", ESP_LOG_VERBOSE);
-    esp_log_level_set("transport_base", ESP_LOG_VERBOSE);
-    esp_log_level_set("esp-tls", ESP_LOG_VERBOSE);
-    esp_log_level_set("transport", ESP_LOG_VERBOSE);
-    esp_log_level_set("outbox", ESP_LOG_VERBOSE);
-	ESP_ERROR_CHECK(nvs_flash_init());
-    ESP_ERROR_CHECK(esp_netif_init());
-    ESP_ERROR_CHECK(esp_event_loop_create_default());
-	ESP_ERROR_CHECK(example_connect());
-	mqtt_app_start();
+    // esp_log_level_set("*", ESP_LOG_INFO);
+    // esp_log_level_set("mqtt_client", ESP_LOG_VERBOSE);
+    // esp_log_level_set("mqtt_example", ESP_LOG_VERBOSE);
+    // esp_log_level_set("transport_base", ESP_LOG_VERBOSE);
+    // esp_log_level_set("esp-tls", ESP_LOG_VERBOSE);
+    // esp_log_level_set("transport", ESP_LOG_VERBOSE);
+    // esp_log_level_set("outbox", ESP_LOG_VERBOSE);
+	// ESP_ERROR_CHECK(nvs_flash_init());
+    // ESP_ERROR_CHECK(esp_netif_init());
+    // ESP_ERROR_CHECK(esp_event_loop_create_default());
+	// ESP_ERROR_CHECK(example_connect());
+	// mqtt_app_start();
 
     // Initialization of device peripheral and objects
-    ESP_ERROR_CHECK(master_init());
+    ESP_ERROR_CHECK(Mobus_Master_init());
     vTaskDelay(10);
-    master_operation_func(NULL);
 
-    xTaskCreate(&TaskLedHandle, "TaskLedHandle", 2048, NULL, 1, &TASK_LED_Handle);
+    xTaskCreate(&TaskModbusHandle, "TaskModbusHandle", 2048, NULL, 1, &TASK_LED_Handle);
     xTaskCreate(&TaskLedHandle, "TaskLedHandle", 2048, NULL, 2, &TASK_LED_Handle);
 	
+    while (1)
+    {
+        // eMBMasterReqReadInputRegister(1, 0, 1, 1000);
+        vTaskDelay(3000/portTICK_PERIOD_MS);
+    }
+    
+
 }
